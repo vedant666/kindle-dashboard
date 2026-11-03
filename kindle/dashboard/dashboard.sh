@@ -148,15 +148,15 @@ draw_page() {
 
 # ---------------------------------------------------------------- input
 
-touch_device() {
-    [ -n "$TOUCH_DEV" ] && { echo "$TOUCH_DEV"; return; }
-    awk '/^N:/ { n = tolower($0); t = (n ~ /touch|_mt|cyttsp|pt_mt|zforce|elan/) }
-         /^H:/ && t { for (i = 1; i <= NF; i++) if ($i ~ /^event/) { print "/dev/input/" $i; exit } }' \
+input_device() {   # $1 = regex for the device name; prints /dev/input/eventN
+    # On the PW5 the lines look like: N: Name="pt_mt"  /  H: Handlers=event1 perfmgr
+    awk -v re="$1" '/^N:/ { t = (tolower($0) ~ re) }
+         /^H:/ && t && match($0, /event[0-9]+/) { print "/dev/input/" substr($0, RSTART, RLENGTH); exit }' \
         /proc/bus/input/devices
 }
 
 watch_touch() {    # one tap is a burst of events; signal the main loop once per burst
-    dev=$(touch_device)
+    dev=${TOUCH_DEV:-$(input_device 'touch|_mt|cyttsp|zforce|elan')}
     [ -z "$dev" ] && { log "no touchscreen found; set TOUCH_DEV"; return; }
     log "touch input: $dev"
     last=0
@@ -168,8 +168,22 @@ watch_touch() {    # one tap is a burst of events; signal the main loop once per
     done
 }
 
-watch_power() {
-    lipc-wait-event com.lab126.powerd goingToScreenSaver,suspending >/dev/null 2>&1
+watch_power() {    # read the power key directly; powerd sends no events while the GUI is stopped
+    dev=$(input_device 'pwrkey|power|onkey')
+    if [ -n "$dev" ]; then
+        log "power key: $dev"
+        dd if="$dev" of=/dev/null bs=16 count=1 2>/dev/null
+    else
+        log "no power key device found; falling back to powerd events"
+        lipc-wait-event com.lab126.powerd goingToScreenSaver,suspending >/dev/null 2>&1
+    fi
+    log "power button pressed"
+    kill -TERM "$MAIN" 2>/dev/null
+}
+
+watch_usb() {      # USB mode takes /mnt/us away, so hand the Kindle back to its own interface
+    lipc-wait-event com.lab126.hal usbPlugIn,usbConfigured >/dev/null 2>&1 || return
+    log "USB connected"
     kill -TERM "$MAIN" 2>/dev/null
 }
 
@@ -177,6 +191,10 @@ watch_power() {
 
 cleanup() {
     for p in $WATCHERS; do kill "$p" 2>/dev/null; done
+    # The watchers' blocked readers outlive them; stop those too.
+    for p in $( (ps -o pid,args 2>/dev/null || ps) | awk '/dd if=\/dev\/input|lipc-wait-event com.lab126.(hal|powerd)/ && !/awk/ { print $1 }'); do
+        kill "$p" 2>/dev/null
+    done
     [ -n "$NAP" ] && kill "$NAP" 2>/dev/null
     lipc-set-prop com.lab126.powerd preventScreenSaver 0 2>/dev/null
     [ "$STOP_GUI" = 1 ] && gui start
@@ -207,6 +225,7 @@ loop() {
 
     watch_touch & WATCHERS=$!
     watch_power & WATCHERS="$WATCHERS $!"
+    watch_usb & WATCHERS="$WATCHERS $!"
 
     refresh
     build_list
@@ -219,6 +238,8 @@ loop() {
 
     while :; do
         s=$(date +%S); nap $((60 - ${s#0}))
+        # Storage gone means USB mode started without the event reaching us.
+        [ -f "$DIR/settings.sh" ] || { cleanup; exit 0; }
         if [ "$TAPPED" = 1 ]; then
             TAPPED=0
             build_list; next_page; draw_page
