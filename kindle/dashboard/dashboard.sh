@@ -101,6 +101,13 @@ next_page() {
     else PAGE=$(echo "$LIST" | sed -n "$((n + 1))p"); fi
 }
 
+prev_page() {
+    n=$(echo "$LIST" | grep -n -x -F "$PAGE" | head -n1 | cut -d: -f1)
+    total=$(echo "$LIST" | grep -c .)
+    if [ -z "$n" ] || [ "$n" -le 1 ]; then PAGE=$(echo "$LIST" | sed -n "${total}p")
+    else PAGE=$(echo "$LIST" | sed -n "$((n - 1))p"); fi
+}
+
 page_file() {
     case "$1" in
         local:*) echo "$DIR/photos/${1#local:}" ;;
@@ -155,16 +162,45 @@ input_device() {   # $1 = regex for the device name; prints /dev/input/eventN
         /proc/bus/input/devices
 }
 
-watch_touch() {    # one tap is a burst of events; signal the main loop once per burst
+tap() {            # $1, $2 = raw touch position; top-left corner exits, left third goes back
+    px=$(($1 * 100 / MAXX)); py=$(($2 * 100 / MAXY))
+    if [ "$px" -lt 25 ] && [ "$py" -lt 15 ]; then action=exit
+    elif [ "$px" -lt 33 ]; then action=prev
+    else action=next; fi
+    log "tap at $1,$2 ($px%,$py%) -> $action"
+    case $action in
+        exit) kill -TERM "$MAIN" ;;
+        prev) kill -USR2 "$MAIN" ;;
+        next) kill -USR1 "$MAIN" ;;
+    esac
+}
+
+watch_touch() {    # decodes raw input events and acts once per finger lift
     dev=${TOUCH_DEV:-$(input_device 'touch|_mt|cyttsp|zforce|elan')}
     [ -z "$dev" ] && { log "no touchscreen found; set TOUCH_DEV"; return; }
-    log "touch input: $dev"
-    last=0
+    # evtest prints the axis ranges before it starts waiting for events.
+    evtest "$dev" > "$RUN/touchinfo" 2>&1 & ep=$!
+    sleep 1; kill "$ep" 2>/dev/null
+    eval "$(awk '/Event code/ { f = "" } /ABS_MT_POSITION_X/ { f = "MAXX" } /ABS_MT_POSITION_Y/ { f = "MAXY" }
+                 /Max/ && f { print f "=" $2; f = "" }' "$RUN/touchinfo")"
+    MAXX=${MAXX:-1235}; MAXY=${MAXY:-1647}
+    log "touch input: $dev (range ${MAXX}x${MAXY})"
+    x=; y=
     while :; do
-        dd if="$dev" of=/dev/null bs=16 count=1 2>/dev/null || { sleep 5; continue; }
-        now=$(date +%s)
-        [ $((now - last)) -ge 2 ] && kill -USR1 "$MAIN" 2>/dev/null
-        last=$now
+        # struct input_event on 32-bit ARM: 8 bytes time, u16 type, u16 code, s32 value
+        set -- $(dd if="$dev" bs=16 count=1 2>/dev/null | od -An -v -tu2)
+        [ $# -lt 8 ] && { sleep 1; continue; }
+        lift=
+        case "$5:$6" in
+            3:53|3:0) x=$7 ;;
+            3:54|3:1) y=$7 ;;
+            3:57) [ "$8" = 65535 ] && lift=1 ;;     # tracking id -1 = finger lifted
+            1:330) [ "$7" = 0 ] && lift=1 ;;        # BTN_TOUCH released
+        esac
+        if [ -n "$lift" ] && [ -n "$x" ] && [ -n "$y" ]; then
+            tap "$x" "$y"
+            x=; y=
+        fi
     done
 }
 
@@ -178,6 +214,7 @@ watch_power() {    # read the power key directly; powerd sends no events while t
         lipc-wait-event com.lab126.powerd goingToScreenSaver,suspending >/dev/null 2>&1
     fi
     log "power button pressed"
+    message "Exiting dashboard... (press power again if the Kindle goes to sleep)"
     kill -TERM "$MAIN" 2>/dev/null
 }
 
@@ -196,14 +233,18 @@ cleanup() {
         kill "$p" 2>/dev/null
     done
     [ -n "$NAP" ] && kill "$NAP" 2>/dev/null
+    if [ "$STOP_GUI" = 1 ]; then
+        message "Exiting dashboard..."
+        gui start
+        sleep 3
+    fi
     lipc-set-prop com.lab126.powerd preventScreenSaver 0 2>/dev/null
-    [ "$STOP_GUI" = 1 ] && gui start
     rm -f "$RUN/pid"
     log "stopped"
 }
 
 nap() {            # sleep that a tap (USR1) can cut short
-    [ "$TAPPED" = 1 ] && return
+    [ "$TAPPED" != 0 ] && return
     sleep "$1" & NAP=$!
     wait "$NAP"
     kill "$NAP" 2>/dev/null
@@ -217,6 +258,7 @@ loop() {
     log "starting in $MODE mode (fbink: ${FBINK:-none, using eips})"
     TAPPED=0
     trap 'TAPPED=1' USR1
+    trap 'TAPPED=2' USR2
     trap 'cleanup; exit 0' TERM INT
 
     lipc-set-prop com.lab126.powerd preventScreenSaver 1
@@ -240,9 +282,11 @@ loop() {
         s=$(date +%S); nap $((60 - ${s#0}))
         # Storage gone means USB mode started without the event reaching us.
         [ -f "$DIR/settings.sh" ] || { cleanup; exit 0; }
-        if [ "$TAPPED" = 1 ]; then
+        if [ "$TAPPED" != 0 ]; then
+            build_list
+            if [ "$TAPPED" = 2 ]; then prev_page; else next_page; fi
             TAPPED=0
-            build_list; next_page; draw_page
+            draw_page
             last_rotate=$(date +%s)
             continue
         fi
