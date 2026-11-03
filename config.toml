@@ -1,0 +1,46 @@
+# Kindle dashboard settings. Edit this file on GitHub and the next scheduled run picks it up.
+
+[display]
+width = 1236
+height = 1648
+timezone = "Asia/Kolkata"
+clock_24h = false
+
+[location]
+name = "Katra"
+latitude = 32.9916
+longitude = 74.9319
+
+# Which pages to render, in the order the "rotate" mode cycles through them.
+[pages]
+order = ["home", "news", "markets", "photo"]
+
+[news]
+headlines_per_section = 3
+
+[[news.feeds]]
+section = "India"
+url = "https://www.thehindu.com/news/national/feeder/default.rss"
+
+[[news.feeds]]
+section = "World"
+url = "https://feeds.bbci.co.uk/news/world/rss.xml"
+
+[[news.feeds]]
+section = "Tech"
+url = "https://feeds.arstechnica.com/arstechnica/index"
+
+# Yahoo Finance symbols (unofficial, free; may need fixing if Yahoo changes things).
+[markets]
+indices = [
+  { label = "Nifty 50", symbol = "^NSEI" },
+  { label = "Sensex", symbol = "^BSESN" },
+  { label = "USD / INR", symbol = "INR=X" },
+]
+# Gold is shown in INR per 10 g, converted from the international USD/oz price
+# (excludes Indian import duty and GST, so it reads below local jeweller rates).
+gold_symbol = "GC=F"
+watchlist = []   # e.g. ["RELIANCE.NS", "TCS.NS", "INFY.NS"]
+
+[photo]
+clock_overlay = true

@@ -1,0 +1,2 @@
+# Kindle scripts must keep Unix line endings or the Kindle's shell can't run them.
+*.sh text eol=lf

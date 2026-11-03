@@ -1,0 +1,5 @@
+out/
+_site/
+__pycache__/
+*.pyc
+kindle/dashboard/photos/*.png

@@ -1,0 +1,37 @@
+QUOTES = [
+    ("Arise, awake, and stop not till the goal is reached.", "Swami Vivekananda"),
+    ("Be the change that you wish to see in the world.", "Mahatma Gandhi"),
+    ("The mind is everything. What you think you become.", "Buddha"),
+    ("You have the right to work, but never to the fruit of work.", "Bhagavad Gita"),
+    ("Where the mind is without fear and the head is held high.", "Rabindranath Tagore"),
+    ("Dream, dream, dream. Dreams transform into thoughts and thoughts result in action.", "A. P. J. Abdul Kalam"),
+    ("Simplicity is the ultimate sophistication.", "Leonardo da Vinci"),
+    ("Well begun is half done.", "Aristotle"),
+    ("It does not matter how slowly you go as long as you do not stop.", "Confucius"),
+    ("The journey of a thousand miles begins with one step.", "Lao Tzu"),
+    ("Knowing yourself is the beginning of all wisdom.", "Aristotle"),
+    ("Waste no more time arguing what a good man should be. Be one.", "Marcus Aurelius"),
+    ("The happiness of your life depends upon the quality of your thoughts.", "Marcus Aurelius"),
+    ("We suffer more often in imagination than in reality.", "Seneca"),
+    ("Luck is what happens when preparation meets opportunity.", "Seneca"),
+    ("Nothing is so painful to the human mind as a great and sudden change.", "Mary Shelley"),
+    ("I am not afraid of storms, for I am learning how to sail my ship.", "Louisa May Alcott"),
+    ("What we think, we become.", "Buddha"),
+    ("An eye for an eye only ends up making the whole world blind.", "Mahatma Gandhi"),
+    ("Take up one idea. Make that one idea your life.", "Swami Vivekananda"),
+    ("Faith is the bird that feels the light when the dawn is still dark.", "Rabindranath Tagore"),
+    ("Excellence is a continuous process and not an accident.", "A. P. J. Abdul Kalam"),
+    ("Do not dwell in the past, do not dream of the future; concentrate the mind on the present.", "Buddha"),
+    ("Life is really simple, but we insist on making it complicated.", "Confucius"),
+    ("He who has a why to live can bear almost any how.", "Friedrich Nietzsche"),
+    ("The only true wisdom is in knowing you know nothing.", "Socrates"),
+    ("Energy and persistence conquer all things.", "Benjamin Franklin"),
+    ("Not all those who wander are lost.", "J. R. R. Tolkien"),
+    ("Strength does not come from physical capacity. It comes from an indomitable will.", "Mahatma Gandhi"),
+    ("You cannot cross the sea merely by standing and staring at the water.", "Rabindranath Tagore"),
+    ("In the middle of difficulty lies opportunity.", "Albert Einstein"),
+]
+
+
+def quote_of_the_day(date):
+    return QUOTES[date.toordinal() % len(QUOTES)]
