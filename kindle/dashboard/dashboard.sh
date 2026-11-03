@@ -185,10 +185,12 @@ watch_touch() {    # decodes raw input events and acts once per finger lift
                  /Max/ && f { print f "=" $2; f = "" }' "$RUN/touchinfo")"
     MAXX=${MAXX:-1235}; MAXY=${MAXY:-1647}
     log "touch input: $dev (range ${MAXX}x${MAXY})"
+    # Keep one descriptor open: events that arrive while the device is closed are lost.
+    exec 3< "$dev"
     x=; y=
     while :; do
         # struct input_event on 32-bit ARM: 8 bytes time, u16 type, u16 code, s32 value
-        set -- $(dd if="$dev" bs=16 count=1 2>/dev/null | od -An -v -tu2)
+        set -- $(dd bs=16 count=1 <&3 2>/dev/null | od -An -v -tu2)
         [ $# -lt 8 ] && { sleep 1; continue; }
         lift=
         case "$5:$6" in
@@ -229,14 +231,22 @@ watch_usb() {      # USB mode takes /mnt/us away, so hand the Kindle back to its
 cleanup() {
     for p in $WATCHERS; do kill "$p" 2>/dev/null; done
     # The watchers' blocked readers outlive them; stop those too.
-    for p in $( (ps -o pid,args 2>/dev/null || ps) | awk '/dd if=\/dev\/input|lipc-wait-event com.lab126.(hal|powerd)/ && !/awk/ { print $1 }'); do
+    for p in $( (ps -o pid,args 2>/dev/null || ps) | awk '/dd (if=\/dev\/input|bs=16 count=1)|lipc-wait-event com.lab126.(hal|powerd)/ && !/awk/ { print $1 }'); do
         kill "$p" 2>/dev/null
     done
     [ -n "$NAP" ] && kill "$NAP" 2>/dev/null
     if [ "$STOP_GUI" = 1 ]; then
-        message "Exiting dashboard..."
+        message "Exiting dashboard... the Kindle home screen takes up to a minute to return"
         gui start
-        sleep 3
+        # The interface keeps loading long after upstart says it is running, and it does
+        # not redraw on its own; ask for the home screen until the app manager accepts.
+        i=0
+        while [ "$i" -lt 18 ]; do
+            sleep 5
+            lipc-set-prop com.lab126.appmgrd start app://com.lab126.booklet.home 2>/dev/null && break
+            i=$((i + 1))
+        done
+        log "home screen requested after $(((i + 1) * 5)) s"
     fi
     lipc-set-prop com.lab126.powerd preventScreenSaver 0 2>/dev/null
     rm -f "$RUN/pid"
