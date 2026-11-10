@@ -5,6 +5,9 @@ width = 1236
 height = 1648
 timezone = "Asia/Kolkata"
 clock_24h = false
+# Landscape pages are stored turned on their side. "cw" = stand the Kindle with its
+# USB port on the right; "ccw" = USB port on the left.
+landscape_rotation = "cw"
 
 [location]
 name = "Katra"

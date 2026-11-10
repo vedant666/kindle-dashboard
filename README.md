@@ -45,8 +45,19 @@ Edit `config.toml` to change the location, feeds, market symbols or page order.
 3. On the Kindle, open **Dashboard - Home** (or News / Markets / Photos / Rotate all pages)
    from the library.
 
-While it runs: **tap** the screen for the next page, **press the power button** to exit back to the
-normal Kindle. Keep it on a charger. If it ever gets stuck, hold the power button about 40 s to
+While it runs, tap the screen (positions as you see the page, in either orientation):
+
+| Where | What |
+|---|---|
+| top-left corner | exit to the normal Kindle (the home screen takes up to a minute) |
+| top-right corner | frontlight: off → 3 → 8 → 15 → 25 → off |
+| bottom-left corner | switch portrait / landscape |
+| left third | previous page |
+| anywhere else | next page |
+
+The power button also exits. Orientation and light level are remembered; your normal reading
+brightness comes back when you exit. Landscape pages assume the USB port is on the right
+(`landscape_rotation` in `config.toml`). Keep it on a charger. If it ever gets stuck, hold the power button about 40 s to
 reboot. Nothing starts at boot, so a reboot always brings back the normal Kindle.
 `dashboard/dashboard.log` on the Kindle shows what happened.
 

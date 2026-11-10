@@ -71,64 +71,89 @@ def main():
         per = cfg["news"]["headlines_per_section"]
         news = [(f["section"], fetch.feed(f["url"], per)) for f in cfg["news"]["feeds"]]
 
+    tzname = cfg["display"]["timezone"]
+    wx = air = None
+    if "home" in order:
+        wx = fetch.weather(loc["latitude"], loc["longitude"], tzname)
+        air = fetch.air_quality(loc["latitude"], loc["longitude"], tzname)
+    rows = market_rows(cfg) if "markets" in order else []
+    quote = quote_of_the_day(now.date())
+
+    # Every page is rendered twice: "home.png" (portrait) and "home-land.png" (landscape,
+    # stored turned on its side). pages.txt lists the base names.
     pages, clocks = [], {}
+    for suffix, ocfg in (("", cfg), ("-land", render.landscape(cfg))):
+        land = bool(suffix)
 
-    def save(name, img):
-        img.save(out / f"{name}.png", optimize=True)
-        pages.append(name)
+        def save(name, img, clock=None):
+            if clock:
+                size, x, y = clock
+                slots = [xy for xy, _ in render.clock_slots(size, x, y)]
+                if land:
+                    slots = [render.box_to_panel(xy, wh, img.size, cfg)
+                             for xy, wh in render.clock_slots(size, x, y)]
+                key = ("photo" if name.startswith("photo") else name) + suffix
+                clocks[key] = (size + suffix, slots)
+            if land:
+                img = render.to_panel(img, cfg)
+            img.save(out / f"{name}{suffix}.png", optimize=True)
+            if not land:
+                pages.append(name)
 
-    for page in order:
-        if page == "home":
-            wx = fetch.weather(loc["latitude"], loc["longitude"], cfg["display"]["timezone"])
-            air = fetch.air_quality(loc["latitude"], loc["longitude"], cfg["display"]["timezone"])
-            img, c = render.page_home(cfg, now, wx, air, news, quote_of_the_day(now.date()))
-            clocks.update(c)
-            save("home", img)
-        elif page == "news":
-            save("news", render.page_news(cfg, now, news))
-        elif page == "markets":
-            save("markets", render.page_markets(cfg, now, market_rows(cfg)))
-        elif page == "photo":
-            n = 0
-            for src in photo_sources():
-                try:
-                    img, c = render.page_photo(cfg, now, render.prepare_photo(src, cfg))
-                except Exception as e:
-                    print(f"warning: photo {src.name} failed: {e}", file=sys.stderr)
-                    continue
-                n += 1
-                clocks.update(c)
-                save(f"photo-{n}", img)
-            if not n:
-                # Placeholder; the Kindle skips it when it has photos of its own (USB).
-                img, c = render.page_photo(cfg, now, None)
-                clocks.update(c)
-                save("photo-empty", img)
-        else:
-            print(f"warning: unknown page {page!r} in config", file=sys.stderr)
+        for page in order:
+            if page == "home":
+                draw_home = render.page_home_land if land else render.page_home
+                img, c = draw_home(ocfg, now, wx, air, news, quote)
+                save("home", img, c.get("home"))
+            elif page == "news":
+                save("news", render.page_news(ocfg, now, news))
+            elif page == "markets":
+                save("markets", render.page_markets(ocfg, now, rows))
+            elif page == "photo":
+                n = 0
+                for src in photo_sources():
+                    try:
+                        img, c = render.page_photo(ocfg, now, render.prepare_photo(src, ocfg))
+                    except Exception as e:
+                        print(f"warning: photo {src.name} failed: {e}", file=sys.stderr)
+                        continue
+                    n += 1
+                    save(f"photo-{n}", img, c.get("photo"))
+                if not n:
+                    # Placeholder; the Kindle skips it when it has photos of its own (USB).
+                    img, c = render.page_photo(ocfg, now, None)
+                    save("photo-empty", img, c.get("photo"))
+            elif not land:
+                print(f"warning: unknown page {page!r} in config", file=sys.stderr)
 
     for size in render.CLOCK_SIZES:
-        tdir = out / "tiles" / size
-        tdir.mkdir(parents=True, exist_ok=True)
-        for ch, name in [(c, c) for c in "0123456789"] + [(":", "colon"), (" ", "blank")]:
-            render.clock_tile(size, ch).save(tdir / f"{name}.png", optimize=True)
+        for suffix in ("", "-land"):
+            tdir = out / "tiles" / f"{size}{suffix}"
+            tdir.mkdir(parents=True, exist_ok=True)
+            for ch, name in [(c, c) for c in "0123456789"] + [(":", "colon"), (" ", "blank")]:
+                tile = render.clock_tile(size, ch)
+                if suffix:
+                    tile = render.to_panel(tile, cfg)
+                tile.save(tdir / f"{name}.png", optimize=True)
 
     (out / "pages.txt").write_text("\n".join(pages) + "\n", encoding="utf-8")
-    lines = []
-    for prefix, (size, x, y) in clocks.items():
-        _, dw, cw, _, _ = render.clock_metrics(size)
-        lines.append(f"{prefix} {size} {x} {y} {dw} {cw}")
+    # "<page> <tile set> x y ..." with one x y per tile: hour 1, hour 2, colon, minute 1, minute 2
+    lines = [f"{key} {tiles} " + " ".join(f"{x} {y}" for x, y in slots)
+             for key, (tiles, slots) in clocks.items()]
     (out / "clock.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (out / "landscape.txt").write_text(cfg["display"]["landscape_rotation"] + "\n", encoding="utf-8")
     (out / "updated.txt").write_text(now.isoformat(timespec="seconds") + "\n", encoding="utf-8")
 
-    imgs = "\n".join(f'<figure><img src="{p}.png" alt="{p}"><figcaption>{p}</figcaption></figure>'
-                     for p in pages)
+    imgs = "\n".join(f'<figure><img src="{p}{s}.png" alt="{p}{s}" class="{s.strip("-")}">'
+                     f'<figcaption>{p}{s}</figcaption></figure>'
+                     for s in ("", "-land") for p in pages)
     (out / "index.html").write_text(f"""<!doctype html><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Kindle dashboard</title>
 <style>body{{font-family:sans-serif;background:#ddd;margin:16px}}
 figure{{display:inline-block;margin:8px;text-align:center}}
-img{{width:309px;border:1px solid #999;background:#fff}}</style>
+img{{width:309px;border:1px solid #999;background:#fff}}
+img.land{{transform:rotate({-90 if cfg['display']['landscape_rotation'] == 'cw' else 90}deg);margin:52px 0}}</style>
 <p>Rendered {now:%d %b %Y %H:%M} ({cfg['display']['timezone']})</p>
 {imgs}
 """, encoding="utf-8")

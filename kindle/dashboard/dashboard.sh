@@ -5,7 +5,11 @@
 #   dashboard.sh start <home|news|markets|photos|rotate>    (the scriptlets call this)
 #   dashboard.sh stop
 #
-# While it runs: tap the screen for the next page, press the power button to exit.
+# While it runs, tap the screen (positions as you see the page):
+#   top-left corner = exit          top-right corner = cycle the frontlight
+#   bottom-left corner = portrait/landscape
+#   left third = previous page      anywhere else = next page
+# The power button also exits.
 # If anything ever gets stuck, hold the power button ~40 s to reboot: nothing here
 # starts at boot, so a reboot always brings back the normal Kindle.
 
@@ -14,7 +18,9 @@ DIR=${DASH_DIR:-/mnt/us/dashboard}
 CACHE="$DIR/cache"
 RUN=/tmp/dashboard
 LOG="$DIR/dashboard.log"
-mkdir -p "$CACHE/tiles/big" "$CACHE/tiles/small" "$RUN" "$DIR/photos"
+TILESETS="big small big-land small-land"
+for s in $TILESETS; do mkdir -p "$CACHE/tiles/$s"; done
+mkdir -p "$RUN" "$DIR/photos"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; }
 
@@ -67,10 +73,13 @@ refresh() {        # returns 0 when new images were downloaded
     cmp -s "$RUN/updated.txt" "$CACHE/updated.txt" && return 1
     fetch "$BASE_URL/pages.txt" "$CACHE/pages.txt" || return 1
     fetch "$BASE_URL/clock.txt" "$CACHE/clock.txt"
+    fetch "$BASE_URL/landscape.txt" "$CACHE/landscape.txt"
     for p in $(cat "$CACHE/pages.txt"); do
-        fetch "$BASE_URL/$p.png" "$CACHE/$p.png" || log "failed to get $p.png"
+        for o in "" -land; do
+            fetch "$BASE_URL/$p$o.png" "$CACHE/$p$o.png" || log "failed to get $p$o.png"
+        done
     done
-    for s in big small; do
+    for s in $TILESETS; do
         for c in 0 1 2 3 4 5 6 7 8 9 colon blank; do
             fetch "$BASE_URL/tiles/$s/$c.png" "$CACHE/tiles/$s/$c.png"
         done
@@ -84,7 +93,7 @@ refresh() {        # returns 0 when new images were downloaded
 
 build_list() {     # sets LIST, one page per line
     web=$(cat "$CACHE/pages.txt" 2>/dev/null)
-    locals=$(cd "$DIR/photos" && ls *.png 2>/dev/null | sed 's/^/local:/')
+    locals=$(cd "$DIR/photos" && ls *.png 2>/dev/null | grep -v -- '-land\.png$' | sed 's/\.png$//; s/^/local:/')
     photos=$(printf '%s\n%s\n' "$(echo "$web" | grep '^photo-[0-9]')" "$locals" | grep .)
     [ -z "$photos" ] && photos=$(echo "$web" | grep -x photo-empty)
     if [ "$MODE" = photos ]; then
@@ -108,36 +117,63 @@ prev_page() {
     else PAGE=$(echo "$LIST" | sed -n "$((n - 1))p"); fi
 }
 
-page_file() {
+page_file() {      # the image for page $1 in the current orientation
     case "$1" in
-        local:*) echo "$DIR/photos/${1#local:}" ;;
-        *) echo "$CACHE/$1.png" ;;
+        local:*) f="$DIR/photos/${1#local:}" ;;
+        *) f="$CACHE/$1" ;;
     esac
+    # Private photos may only exist in portrait; show that rather than nothing.
+    if [ -f "$f$SUFFIX.png" ]; then echo "$f$SUFFIX.png"; else echo "$f.png"; fi
+}
+
+set_orientation() {  # $1 = portrait|landscape; remembered across runs
+    ORIENTATION=$1
+    echo "$1" > "$DIR/orientation"
+    echo "$1" > "$RUN/orientation"
+    if [ "$1" = landscape ]; then SUFFIX=-land; else SUFFIX=; fi
+}
+
+# ---------------------------------------------------------------- frontlight
+
+fl_get() { lipc-get-prop com.lab126.powerd flIntensity 2>/dev/null; }
+
+fl_set() {         # $1 = 0 (off) .. 25; remembered for the next run
+    lipc-set-prop com.lab126.powerd flIntensity "$1" 2>/dev/null
+    echo "$1" > "$DIR/frontlight"
+}
+
+fl_cycle() {       # step to the next level in FL_LEVELS, wrapping to off
+    cur=$(fl_get); next=0
+    for l in $FL_LEVELS; do
+        [ "$l" -gt "${cur:-0}" ] && { next=$l; break; }
+    done
+    fl_set "$next"
+    log "frontlight $cur -> $next"
 }
 
 draw_clock() {     # pastes only the digits that changed since the last call
     case "$PAGE" in photo-*|local:*) key=photo ;; *) key=$PAGE ;; esac
-    line=$(grep "^$key " "$CACHE/clock.txt" 2>/dev/null | head -n1)
+    line=$(grep "^$key$SUFFIX " "$CACHE/clock.txt" 2>/dev/null | head -n1)
     [ -z "$line" ] && return
-    set -- $line   # prefix size x y digit_w colon_w
-    size=$2; x=$3; y=$4; dw=$5; cw=$6
-    tiles="$CACHE/tiles/$size"
+    # <page> <tile set> then x y for: hour 1, hour 2, colon, minute 1, minute 2
+    set -- $line
+    tiles="$CACHE/tiles/$2"; shift 2
+    P1="$1 $2"; P2="$3 $4"; PC="$5 $6"; P3="$7 $8"; P4="$9 ${10}"
     if [ "$CLOCK_24H" = 1 ]; then t=$(TZ="$TZ_POSIX" date +%H%M)
     else t=$(TZ="$TZ_POSIX" date +%I%M); fi
     set -- $(echo "$t" | sed 's/./& /g')
     [ "$CLOCK_24H" != 1 ] && [ "$1" = 0 ] && set -- blank "$2" "$3" "$4"
-    offs="0 $dw $((2 * dw + cw)) $((3 * dw + cw))"
     i=0
-    for off in $offs; do
+    for c in "$@"; do
         i=$((i + 1))
-        eval "c=\${$i}; old=\${LAST_$i}"
+        eval "old=\${LAST_$i}; pos=\$P$i"
         if [ "$c" != "$old" ]; then
-            show_at "$tiles/$c.png" $((x + off)) "$y"
+            show_at "$tiles/$c.png" $pos
             eval "LAST_$i=\$c"
         fi
     done
     if [ -z "$LAST_COLON" ]; then
-        show_at "$tiles/colon.png" $((x + 2 * dw)) "$y"
+        show_at "$tiles/colon.png" $PC
         LAST_COLON=1
     fi
 }
@@ -162,16 +198,25 @@ input_device() {   # $1 = regex for the device name; prints /dev/input/eventN
         /proc/bus/input/devices
 }
 
-tap() {            # $1, $2 = raw touch position; top-left corner exits, left third goes back
+tap() {            # $1, $2 = raw touch position on the (portrait) panel
     px=$(($1 * 100 / MAXX)); py=$(($2 * 100 / MAXY))
-    if [ "$px" -lt 25 ] && [ "$py" -lt 15 ]; then action=exit
-    elif [ "$px" -lt 33 ]; then action=prev
+    # Turn it into a position on the page as the viewer sees it.
+    if [ "$(cat "$RUN/orientation" 2>/dev/null)" = landscape ]; then
+        if [ "$(cat "$CACHE/landscape.txt" 2>/dev/null)" = ccw ]; then vx=$((100 - py)); vy=$px
+        else vx=$py; vy=$((100 - px)); fi
+    else
+        vx=$px; vy=$py
+    fi
+    if [ "$vx" -lt 20 ] && [ "$vy" -lt 15 ]; then action=exit
+    elif [ "$vx" -gt 80 ] && [ "$vy" -lt 15 ]; then action=light
+    elif [ "$vx" -lt 20 ] && [ "$vy" -gt 85 ]; then action=rotate
+    elif [ "$vx" -lt 33 ]; then action=prev
     else action=next; fi
-    log "tap at $1,$2 ($px%,$py%) -> $action"
+    log "tap at $1,$2 (page $vx%,$vy%) -> $action"
     case $action in
         exit) kill -TERM "$MAIN" ;;
-        prev) kill -USR2 "$MAIN" ;;
-        next) kill -USR1 "$MAIN" ;;
+        light) fl_cycle ;;
+        *) echo "$action" > "$RUN/action"; kill -USR1 "$MAIN" ;;
     esac
 }
 
@@ -249,6 +294,7 @@ cleanup() {
         log "home screen requested after $(((i + 1) * 5)) s"
     fi
     lipc-set-prop com.lab126.powerd preventScreenSaver 0 2>/dev/null
+    [ -n "$FL_ORIG" ] && lipc-set-prop com.lab126.powerd flIntensity "$FL_ORIG" 2>/dev/null
     rm -f "$RUN/pid"
     log "stopped"
 }
@@ -268,10 +314,14 @@ loop() {
     log "starting in $MODE mode (fbink: ${FBINK:-none, using eips})"
     TAPPED=0
     trap 'TAPPED=1' USR1
-    trap 'TAPPED=2' USR2
     trap 'cleanup; exit 0' TERM INT
 
     lipc-set-prop com.lab126.powerd preventScreenSaver 1
+    set_orientation "$(cat "$DIR/orientation" 2>/dev/null || echo "${ORIENTATION:-portrait}")"
+    FL_ORIG=$(fl_get)
+    level=$(cat "$DIR/frontlight" 2>/dev/null || echo "$FRONTLIGHT")
+    [ -n "$level" ] && fl_set "$level"
+    log "orientation $ORIENTATION, frontlight ${FL_ORIG:-?} -> ${level:-unchanged}"
     if [ "$STOP_GUI" = 1 ]; then gui stop; sleep 2; fi
     message "Loading dashboard..."
 
@@ -294,7 +344,12 @@ loop() {
         [ -f "$DIR/settings.sh" ] || { cleanup; exit 0; }
         if [ "$TAPPED" != 0 ]; then
             build_list
-            if [ "$TAPPED" = 2 ]; then prev_page; else next_page; fi
+            case "$(cat "$RUN/action" 2>/dev/null)" in
+                prev) prev_page ;;
+                rotate) if [ "$ORIENTATION" = landscape ]; then set_orientation portrait
+                        else set_orientation landscape; fi ;;
+                *) next_page ;;
+            esac
             TAPPED=0
             draw_page
             last_rotate=$(date +%s)

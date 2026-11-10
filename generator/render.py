@@ -217,6 +217,35 @@ def clock_width(size):
     return 4 * dw + cw
 
 
+def clock_slots(size, x, y):
+    """Top-left corner of each tile in Kindle order: hour 1, hour 2, colon, minute 1, minute 2."""
+    _, dw, cw, h, _ = clock_metrics(size)
+    return [((x, y), (dw, h)), ((x + dw, y), (dw, h)), ((x + 2 * dw, y), (cw, h)),
+            ((x + 2 * dw + cw, y), (dw, h)), ((x + 3 * dw + cw, y), (dw, h))]
+
+
+# ---------------------------------------------------------------- landscape
+# The panel is portrait, so a landscape page is drawn on a wide canvas and stored turned
+# on its side. "cw" turns it clockwise: stand the Kindle with its USB port on the right.
+
+def landscape(cfg):
+    d = cfg["display"]
+    return {**cfg, "display": {**d, "width": d["height"], "height": d["width"]}}
+
+
+def to_panel(img, cfg):
+    """Turn a landscape canvas so the portrait panel shows it upright."""
+    return img.rotate(-90 if cfg["display"]["landscape_rotation"] == "cw" else 90, expand=True)
+
+
+def box_to_panel(xy, wh, frame, cfg):
+    """Where a box on the landscape canvas (size `frame`) lands on the panel."""
+    (x, y), (w, h), (fw, fh) = xy, wh, frame
+    if cfg["display"]["landscape_rotation"] == "cw":
+        return fh - y - h, x
+    return y, fw - x - w
+
+
 # ---------------------------------------------------------------- pages
 
 def page_home(cfg, now, wx, air, news, quote):
@@ -312,6 +341,102 @@ def page_home(cfg, now, wx, air, news, quote):
     return to_eink(img), clocks
 
 
+def page_home_land(cfg, now, wx, air, news, quote):
+    """Two columns: clock, date and today's weather on the left; forecast, news, quote right."""
+    img, draw = canvas(cfg)
+    W, H = cfg["display"]["width"], cfg["display"]["height"]
+    mid = W // 2
+    lx0, lx1 = MARGIN, mid - 40
+    rx0, rx1 = mid + 40, W - MARGIN
+    draw.line([mid, 60, mid, H - 110], fill=LIGHT, width=2)
+
+    # Left column
+    cx = lx0 + (lx1 - lx0 - clock_width("big")) // 2
+    draw_clock(img, cx, 50, "big", clock_text(now, cfg))
+    clocks = {"home": ("big", cx, 50)}
+    _, _, _, ch, _ = clock_metrics("big")
+    date = f"{now:%A}, {now.day} {now:%B %Y}"
+    f = font(46)
+    draw.text((lx0 + (lx1 - lx0 - draw.textlength(date, font=f)) / 2, 50 + ch + 20), date,
+              font=f, fill=BLACK)
+    y = 50 + ch + 96
+    draw.rectangle([lx0, y, lx1, y + 3], fill=BLACK)
+    y += 34
+    if wx:
+        desc, kind = fetch.describe(wx["code"])
+        icon(draw, kind, lx0 + 100, y + 100, 200)
+        tx = lx0 + 240
+        draw.text((tx, y - 14), f"{wx['temp']:.0f}°", font=font(130, "bold"), fill=BLACK)
+        draw.text((tx, y + 150), desc, font=font(42, "bold"), fill=BLACK)
+        draw.text((tx + draw.textlength(desc, font=font(42, "bold")) + 24, y + 158),
+                  f"feels {wx['feels']:.0f}°", font=font(32), fill=DARK)
+        y += 236
+        today = wx["days"][0]
+        rows = [("High / Low", f"{today['high']:.0f}° / {today['low']:.0f}°"),
+                ("Rain chance", f"{today['rain']}%" if today["rain"] is not None else "—"),
+                ("Humidity", f"{wx['humidity']}%")]
+        if air and air["aqi"] is not None:
+            rows.append(("AQI (US)", f"{air['aqi']} · {fetch.aqi_label(air['aqi'])}"))
+        rows.append(("Sunrise – set", f"{wx['sunrise']:%H:%M} – {wx['sunset']:%H:%M}"))
+        fv = font(34, "bold")
+        for label, val in rows:
+            draw.text((lx0, y), label, font=font(30), fill=MID)
+            draw.text((lx1 - draw.textlength(val, font=fv), y - 4), val, font=fv, fill=BLACK)
+            y += 56
+    else:
+        draw.text((lx0, y), "Weather unavailable", font=font(44), fill=MID)
+
+    # Right column: forecast
+    y = 56
+    if wx:
+        cw = (rx1 - rx0) // 3
+        for i, dday in enumerate(wx["days"][1:4]):
+            x0 = rx0 + i * cw
+            c = x0 + cw / 2
+            name = dday["date"].strftime("%A")
+            f = font(32, "bold")
+            draw.text((c - draw.textlength(name, font=f) / 2, y), name, font=f, fill=BLACK)
+            icon(draw, fetch.describe(dday["code"])[1], c, y + 95, 100)
+            t = f"{dday['high']:.0f}° / {dday['low']:.0f}°"
+            f = font(36, "bold")
+            draw.text((c - draw.textlength(t, font=f) / 2, y + 150), t, font=f, fill=BLACK)
+            if dday["rain"] is not None:
+                t = f"Rain {dday['rain']}%"
+                f = font(28)
+                draw.text((c - draw.textlength(t, font=f) / 2, y + 198), t, font=f, fill=DARK)
+            if i:
+                draw.line([x0, y + 10, x0, y + 230], fill=LIGHT, width=2)
+        y += 262
+    draw.rectangle([rx0, y, rx1, y + 1], fill=MID)
+    y += 26
+
+    # Right column: headlines
+    draw.text((rx0, y), "HEADLINES", font=font(28, "bold"), fill=MID)
+    y += 46
+    for item in [items[0] for _, items in news if items][:3]:
+        draw.ellipse([rx0, y + 16, rx0 + 11, y + 27], fill=BLACK)
+        y = text_block(draw, (rx0 + 28, y), item["title"], font(34), rx1 - rx0 - 28,
+                       max_lines=3, spacing=1.2) + 14
+
+    # Right column: quote, pinned to the bottom
+    if quote:
+        text, who = quote
+        f = font(31, "italic")
+        lines = wrap(draw, f"“{text}”", f, rx1 - rx0 - 10, max_lines=3)
+        qy = H - 96 - (len(lines) * 40 + 36)
+        if qy > y + 30:
+            draw.rectangle([rx0, qy - 24, rx1, qy - 23], fill=MID)
+            for i, line in enumerate(lines):
+                draw.text((rx0 + 10, qy + i * 40), line, font=f, fill=BLACK)
+            a = f"— {who}"
+            fa = font(27)
+            draw.text((rx1 - draw.textlength(a, font=fa), qy + len(lines) * 40 + 2), a,
+                      font=fa, fill=DARK)
+
+    footer(draw, cfg, f"{cfg['location']['name']} · updated {now:%H:%M}")
+    return to_eink(img), clocks
+
+
 def page_news(cfg, now, news):
     img, draw = canvas(cfg)
     W, H = cfg["display"]["width"], cfg["display"]["height"]
@@ -367,25 +492,32 @@ def sparkline(draw, box, values, fill=BLACK):
 def page_markets(cfg, now, rows):
     """rows: list of (label, quote-dict-or-None, prefix, decimals)."""
     img, draw = canvas(cfg)
-    W = cfg["display"]["width"]
-    y = header(draw, cfg, "Markets", now)
-    row_h = 260 if len(rows) <= 5 else 180
+    W, H = cfg["display"]["width"], cfg["display"]["height"]
+    top = header(draw, cfg, "Markets", now)
+    # One column in portrait, a grid of two columns in landscape.
+    ncols = 2 if W > H else 1
+    per_col = math.ceil(len(rows) / ncols)
+    row_h = min(260, (H - top - 100) // per_col)
+    col_w = (W - (ncols + 1) * MARGIN) // ncols
+    spark_w = min(420, col_w - 460)
     latest = None
-    for label, q, prefix, dec in rows:
-        draw.text((MARGIN, y), label, font=font(44, "bold"), fill=BLACK)
+    for n, (label, q, prefix, dec) in enumerate(rows):
+        x0 = MARGIN + (n // per_col) * (col_w + MARGIN)
+        x1 = x0 + col_w
+        y = top + (n % per_col) * row_h
+        draw.text((x0, y), label, font=font(44, "bold"), fill=BLACK)
         if not q:
-            draw.text((MARGIN, y + 70), "unavailable", font=font(40), fill=MID)
+            draw.text((x0, y + 70), "unavailable", font=font(40), fill=MID)
         else:
             latest = max(latest, q["time"]) if latest else q["time"]
             price = f"{prefix}{q['price']:,.{dec}f}"
-            draw.text((MARGIN, y + 58), price, font=font(80, "bold"), fill=BLACK)
+            draw.text((x0, y + 58), price, font=font(80, "bold"), fill=BLACK)
             up = q["change"] >= 0
             ch = f"{abs(q['change']):,.{dec}f}  ({abs(q['pct']):.2f}%)"
-            triangle(draw, MARGIN + 4, y + 176, 30, up, BLACK if up else DARK)
-            draw.text((MARGIN + 48, y + 166), ("+" if up else "–") + ch, font=font(36), fill=DARK)
-            sparkline(draw, (W - MARGIN - 420, y + 40, W - MARGIN, y + row_h - 70), q["history"])
-        y += row_h
-        hline(draw, y - 30, cfg, 2, LIGHT)
+            triangle(draw, x0 + 4, y + 176, 30, up, BLACK if up else DARK)
+            draw.text((x0 + 48, y + 166), ("+" if up else "–") + ch, font=font(36), fill=DARK)
+            sparkline(draw, (x1 - spark_w, y + 40, x1, y + row_h - 70), q["history"])
+        draw.rectangle([x0, y + row_h - 30, x1, y + row_h - 29], fill=LIGHT)
     note = "Data: Yahoo Finance (unofficial)"
     if latest:
         latest = latest.astimezone(now.tzinfo)

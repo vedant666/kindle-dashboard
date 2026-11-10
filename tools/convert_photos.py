@@ -35,10 +35,13 @@ def main():
             continue
         try:
             img, _ = render.page_photo(cfg, now, render.prepare_photo(src, cfg))
+            land = render.landscape(cfg)
+            img_l, _ = render.page_photo(land, now, render.prepare_photo(src, land))
         except Exception as e:
             print(f"skipped {src.name}: {e}")
             continue
         img.save(out / f"{src.stem}.png", optimize=True)
+        render.to_panel(img_l, cfg).save(out / f"{src.stem}-land.png", optimize=True)
         done += 1
     print(f"converted {done} photos into {out}")
 
